@@ -1,0 +1,10 @@
+data/
+*.nc
+*.smet
+*.csv
+*.png
+*.pdf
+.ipynb_checkpoints/
+.DS_Store
+venv/
+__pycache__/
