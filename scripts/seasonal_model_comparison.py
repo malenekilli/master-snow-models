@@ -19,6 +19,12 @@ import xarray as xr
 
 
 PROCESSED = ROOT / "data" / "processed"
+NODATA_COLOR = "#d9d9d9"
+REFERENCE_MODEL = "SNP"
+MODEL_COMPARISONS = [
+    ("FSM2", "fsm", f"FSM2-{REFERENCE_MODEL}"),
+    ("seNorge", "senorge", f"seNorge-{REFERENCE_MODEL}"),
+]
 
 
 @dataclass(frozen=True)
@@ -235,15 +241,16 @@ def compute_seasonal_metrics(
 def summarize_metrics(metrics_df: pd.DataFrame) -> pd.DataFrame:
     """Create a compact season/model summary table."""
     records = []
-    model_specs = [("FSM2", "fsm"), ("seNorge", "senorge")]
 
     for (season, season_label), season_df in metrics_df.groupby(["season", "season_label"], sort=False):
-        for model_name, suffix in model_specs:
+        for model_name, suffix, comparison_name in MODEL_COMPARISONS:
             records.append(
                 {
                     "season": season,
                     "season_label": season_label,
-                    "model": model_name,
+                    "model": comparison_name,
+                    "source_model": model_name,
+                    "reference_model": REFERENCE_MODEL,
                     "n_stations": int(season_df[f"rmse_{suffix}"].notna().sum()),
                     "mean_bias": season_df[f"bias_{suffix}"].mean(),
                     "median_bias": season_df[f"bias_{suffix}"].median(),
@@ -256,6 +263,34 @@ def summarize_metrics(metrics_df: pd.DataFrame) -> pd.DataFrame:
             )
 
     return pd.DataFrame(records)
+
+
+def metrics_to_long(metrics_df: pd.DataFrame) -> pd.DataFrame:
+    """Convert wide seasonal metrics to one row per model-SNP comparison."""
+    id_columns = [
+        "season",
+        "season_label",
+        "season_start",
+        "season_end",
+        "station",
+        "elev",
+        "lon",
+        "lat",
+        "n_days",
+    ]
+    frames = []
+
+    for model_name, suffix, comparison_name in MODEL_COMPARISONS:
+        model_df = metrics_df[id_columns].copy()
+        model_df["model"] = comparison_name
+        model_df["source_model"] = model_name
+        model_df["reference_model"] = REFERENCE_MODEL
+        model_df["bias"] = metrics_df[f"bias_{suffix}"]
+        model_df["rmse"] = metrics_df[f"rmse_{suffix}"]
+        model_df["corr"] = metrics_df[f"corr_{suffix}"]
+        frames.append(model_df)
+
+    return pd.concat(frames, ignore_index=True)
 
 
 def compute_daily_error_evolution(
@@ -432,11 +467,11 @@ def plot_seasonal_boxplots(metrics_df: pd.DataFrame, output_path: Path) -> None:
 
     axes[0].legend(
         [bp["boxes"][0], bp["boxes"][1]],
-        ["FSM2", "seNorge"],
+        [MODEL_COMPARISONS[0][2], MODEL_COMPARISONS[1][2]],
         loc="best",
         framealpha=0.9,
     )
-    fig.suptitle("Seasonal Model Performance Against SNOWPACK", fontweight="bold")
+    fig.suptitle("Seasonal Model Performance Relative to SNP", fontweight="bold")
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -450,16 +485,19 @@ def plot_seasonal_rmse_maps(metrics_df: pd.DataFrame, output_path: Path) -> None
         ("full", "Full season"),
     ]
     vmax = metrics_df["rmse_diff_senorge_minus_fsm"].abs().quantile(0.98)
+    cmap = plt.get_cmap("RdBu").copy()
+    cmap.set_bad(NODATA_COLOR)
     fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True, sharey=True)
 
     for ax, (season, title) in zip(axes.ravel(), seasons):
         season_df = metrics_df[metrics_df["season"] == season]
+        ax.set_facecolor(NODATA_COLOR)
         sc = ax.scatter(
             season_df["lon"],
             season_df["lat"],
             c=season_df["rmse_diff_senorge_minus_fsm"],
             s=10,
-            cmap="RdBu",
+            cmap=cmap,
             vmin=-vmax,
             vmax=vmax,
             linewidth=0,
@@ -472,8 +510,8 @@ def plot_seasonal_rmse_maps(metrics_df: pd.DataFrame, output_path: Path) -> None
         ax.grid(True, alpha=0.15)
 
     cbar = fig.colorbar(sc, ax=axes.ravel().tolist(), shrink=0.88, pad=0.02)
-    cbar.set_label("RMSE seNorge - FSM2 [m]\nPositive values: FSM2 lower RMSE")
-    fig.suptitle("Seasonal Spatial Difference in RMSE", fontweight="bold")
+    cbar.set_label("RMSE seNorge-SNP - FSM2-SNP [m]\nPositive values: FSM2-SNP lower RMSE\nLight grey: NoData")
+    fig.suptitle("Seasonal Spatial Difference in RMSE Relative to SNP", fontweight="bold")
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -481,10 +519,11 @@ def plot_seasonal_rmse_maps(metrics_df: pd.DataFrame, output_path: Path) -> None
 def plot_daily_error_evolution(daily_df: pd.DataFrame, output_path: Path) -> None:
     fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
     colors = {"FSM2": "#4c78a8", "seNorge": "#f58518"}
+    labels = {"FSM2": "FSM2-SNP", "seNorge": "seNorge-SNP"}
 
     for model_name, model_df in daily_df.groupby("model"):
-        axes[0].plot(model_df["time"], model_df["mean_bias"], label=model_name, color=colors[model_name])
-        axes[1].plot(model_df["time"], model_df["rmse"], label=model_name, color=colors[model_name])
+        axes[0].plot(model_df["time"], model_df["mean_bias"], label=labels[model_name], color=colors[model_name])
+        axes[1].plot(model_df["time"], model_df["rmse"], label=labels[model_name], color=colors[model_name])
 
     for ax in axes:
         ax.axhline(0, color="black", linewidth=0.8, alpha=0.4)
@@ -499,7 +538,7 @@ def plot_daily_error_evolution(daily_df: pd.DataFrame, output_path: Path) -> Non
     axes[1].set_ylabel("RMSE [m]")
     axes[1].set_title("Daily Spatial RMSE")
     axes[1].set_xlabel("Time")
-    fig.suptitle("Seasonal Evolution of Model Errors", fontweight="bold")
+    fig.suptitle("Seasonal Evolution of Model Errors Relative to SNP", fontweight="bold")
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -512,10 +551,13 @@ def main() -> None:
     print("Computing seasonal station metrics and daily error evolution...", flush=True)
     metrics_df, daily_df = compute_chunked_outputs(snowpack_sd)
     summary_df = summarize_metrics(metrics_df)
+    long_metrics_df = metrics_to_long(metrics_df)
 
     metrics_path = PROCESSED / "seasonal_model_metrics.csv"
+    long_metrics_path = PROCESSED / "seasonal_model_metrics_long.csv"
     summary_path = PROCESSED / "seasonal_model_summary.csv"
     metrics_df.to_csv(metrics_path, index=False)
+    long_metrics_df.to_csv(long_metrics_path, index=False)
     summary_df.to_csv(summary_path, index=False)
 
     daily_path = PROCESSED / "seasonal_daily_error_evolution.csv"
@@ -529,6 +571,7 @@ def main() -> None:
     print("\nSaved outputs:")
     for path in [
         metrics_path,
+        long_metrics_path,
         summary_path,
         daily_path,
         PROCESSED / "Figure_09_Seasonal_Model_Performance.png",
