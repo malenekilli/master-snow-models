@@ -167,14 +167,10 @@ Generated figures are saved in `figures_thesis/`:
 
 ## Author
 
-*Master Thesis, University of [Your University]*  
-*[Your Name]*  
+*Master Thesis, University of NTNU*  
+*Malene Lien Killi*  
 *June 2026*
 
-## License
 
-[Specify license if applicable]
-
----
 
 **Questions or suggestions?** Please open an issue or contact the author.
